@@ -1,0 +1,2 @@
+# automata
+sautomata simulation project
