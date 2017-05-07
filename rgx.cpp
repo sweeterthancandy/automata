@@ -98,7 +98,7 @@ struct nfa_node{
                 result.insert(this);
 		auto iter = edges.find('\0');
 		if( iter != edges.end() )
-			iter->second.epsilon_closure();
+			result += iter->second.epsilon_closure();
                 return result;
         }
         state closure(char c)const{
