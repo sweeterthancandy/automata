@@ -2,6 +2,7 @@
 
 
 #include <boost/lexical_cast.hpp>
+#include <boost/format.hpp>
 
 #include <map>
 #include <vector>
@@ -21,12 +22,12 @@ do{                                                                \
 #define EXPECT_TRUE(EXPR) EXPECT_BOOL(EXPR,true)
 #define EXPECT_FALSE(EXPR) EXPECT_BOOL(EXPR,false)
 
-struct node;
+struct nfa_node;
 
 struct state{
-        typedef std::set<node*>                  set_type;
-        typedef std::set<node*>::iterator        iterator;
-        typedef std::set<node*>::const_iterator  const_iterator;
+        typedef std::set<const nfa_node*>                  set_type;
+        typedef std::set<const nfa_node*>::iterator        iterator;
+        typedef std::set<const nfa_node*>::const_iterator  const_iterator;
 
 private:
         typedef const_iterator                    CMI;
@@ -40,7 +41,7 @@ public:
         size_t size()const{ return mem_.size(); }
 	auto empty()const{ return mem_.empty(); }
 
-        void insert(node* ptr){ mem_.insert(ptr); }
+        void insert(nfa_node const* ptr){ mem_.insert(ptr); }
 
         state& operator+=(state const& that){
                 for(CMI iter(that.mem_.begin()), end(that.mem_.end());iter!=end;++iter){
@@ -52,7 +53,7 @@ public:
 	state move(char c)const;
 
 	friend state union_(state const& left, state const& right){
-		std::vector<node*> aux;
+		std::vector<nfa_node const*> aux;
 		std::set_intersection(
 			left.begin(), left.end(),
 			right.begin(), right.end(),
@@ -62,39 +63,50 @@ public:
 			result.insert(_);
 		return std::move(result);
 	}
+	friend bool operator<(state const& left, state const& right){
+		return std::lexicographical_compare(
+			left.begin(), left.end(),
+			right.begin(), right.end());
+	}
 
 
 private:
-        std::set<node*> mem_;
+        std::set<const nfa_node*> mem_;
 };
 
-struct node{
+struct nfa_node{
 
-        explicit node(std::string const& tag):tag_(tag){}
+        explicit nfa_node(std::string const& tag):tag_(tag){}
 
         // decl transitions
-        node& epsilon(node* that){
+        nfa_node& epsilon(nfa_node* that){
                 return transition('\0', that);
         }
-        node& epsilon(node& that){
+        nfa_node& epsilon(nfa_node& that){
                 return transition('\0', that);
         }
-        node& transition(char c, node& that){
+        nfa_node& transition(char c, nfa_node& that){
 		return transition(c, &that);
         }
-        node& transition(char c, node* that){
+        nfa_node& transition(char c, nfa_node* that){
                 edges[c].insert(that);
                 return *this;
         }
 
-        state epsilon_closure(){
+        state epsilon_closure()const{
                 state result;
                 result.insert(this);
-                result += edges['\0'].epsilon_closure();
+		auto iter = edges.find('\0');
+		if( iter != edges.end() )
+			iter->second.epsilon_closure();
                 return result;
         }
-        state const& closure(char c){
-                return edges[c];
+        state closure(char c)const{
+		state s;
+		auto iter = edges.find(c);
+		if( iter != edges.end())
+			s = iter->second;
+                return std::move(s);
         }
 
         std::string const& tag()const{ return tag_; }
@@ -133,24 +145,29 @@ state state::move(char c)const{
 }
 
 
-struct graph{
-        graph(){
+template<class NodeType>
+struct basic_graph{
+	using node = NodeType;
+        basic_graph(){
         }
 	node* make(){
 		// XXX unique not checked
 		return get(boost::lexical_cast<std::string>(id_));
 	}
-	node* start(){
-		return get("__start__");
-	}
-	node* end(){
-		return get("__end__");
-	}
+	node* start(){ return get("__start__"); }
+	node* end(){ return get("__end__"); }
+	node const* start()const{ return get("__start__"); }
+	node const* end()const{ return get("__end__"); }
         node* get(std::string const& tag){
-                typedef std::map<std::string, node>::iterator MI;
-                MI iter(nodes.find(tag));
+                auto iter(nodes.find(tag));
                 if( iter == nodes.end() )
                         iter = nodes.insert(std::make_pair(tag, node(tag))).first;
+                return &iter->second;
+        }
+        node const* get(std::string const& tag)const{
+                auto iter(nodes.find(tag));
+                if( iter == nodes.end() )
+			return nullptr;
                 return &iter->second;
         }
 private:
@@ -158,8 +175,11 @@ private:
         std::map<std::string, node> nodes;
 };
 
+using nfa_graph = basic_graph<nfa_node>;
 
-bool match(graph& g, std::string const& seq){
+
+
+bool match(nfa_graph& g, std::string const& seq){
         typedef state::iterator NI;
 
 	enum{
@@ -186,6 +206,50 @@ bool match(graph& g, std::string const& seq){
 }
 
 
+struct dfa_node{
+	explicit dfa_node(std::string const& tag):tag_{tag}{}
+	dfa_node* move(char c)const{
+		auto iter = map_.find(c);
+		return ( iter == map_.end() ? nullptr : iter->second );
+	}
+	dfa_node& transition(char c, dfa_node* ptr){
+		map_.insert(std::make_pair(c,ptr));
+		return *this;
+	}
+private:
+	std::string tag_;
+	std::map<char, dfa_node*> map_;
+};
+
+using dfa_graph = basic_graph<dfa_node>;
+
+auto compile(nfa_graph const& nfa){
+	std::map< std::pair< state, char>, state > m;
+
+	std::vector<state> stack;
+	stack.emplace_back( nfa.start()->epsilon_closure() );
+
+	for(;stack.size();){
+		auto head{ stack.back() };
+		stack.pop_back();
+
+		for( char c : {'a', 'b' } ){
+			if( m.count( std::make_pair( head, c) ) == 1 )
+				continue;
+			state s{ head.move(c).epsilon_closure() };
+			m.insert( std::make_pair(std::make_pair(head, c), s) );
+			stack.push_back(s);
+		}
+	}
+	PRINT(m.size());
+
+	for( auto const& _ : m ){
+		std::cout << boost::format("%30s x %c -> %s\n")
+			% _.first.first
+			% _.first.second
+			% _.second;
+	}
+}
 
 
 
@@ -201,7 +265,7 @@ bool match(graph& g, std::string const& seq){
                  -epsilon---- 2 ---b--- 4 ----a--
  */
 void test0(){
-        graph g;
+        nfa_graph g;
 
 	auto start  = g.start();
 	auto end = g.end();
@@ -244,7 +308,7 @@ void test0(){
                 ------------->---- e --------------------
  */
 void test1(){
-        graph g;
+        nfa_graph g;
 
 	auto start  = g.start();
 	auto end = g.end();
@@ -293,6 +357,13 @@ void test1(){
         EXPECT_FALSE(match(g, "aba"));
         EXPECT_TRUE(match(g, "babb"));
         EXPECT_TRUE(match(g, "aaabb"));
+
+	auto compile(g);
+
+
+
+
+
 }
 
 
