@@ -182,7 +182,7 @@ private:
 
 
 
-bool match(nfa_graph& g, std::string const& seq){
+bool match(nfa_graph const& g, std::string const& seq){
         typedef state::iterator NI;
 
 	enum{
@@ -209,6 +209,7 @@ bool match(nfa_graph& g, std::string const& seq){
 }
 
 
+
 struct dfa_node{
 	explicit dfa_node(std::string const& tag):tag_{tag}{}
 	dfa_node* move(char c)const{
@@ -220,6 +221,9 @@ struct dfa_node{
 		return *this;
 	}
         void decl_accepting(){ accepting_ = true; }
+        bool is_accepting()const{ return accepting_; }
+
+        auto tag()const{ return tag_; }
 private:
 	std::string tag_;
 	std::map<char, dfa_node*> map_;
@@ -229,13 +233,9 @@ struct dfa_graph{
 
         dfa_graph(){
         }
-	dfa_node* make(){
-		// XXX unique not checked
-		return get(boost::lexical_cast<std::string>(id_));
-	}
         void decl_start(dfa_node* ptr){ start_ = ptr; }
-	dfa_node* start(){ return get("__start__"); }
-	dfa_node const* start()const{ return get("__start__"); }
+	dfa_node* start(){ return start_; }
+	dfa_node const* start()const{ return start_; }
         dfa_node* get(std::string const& tag){
                 auto iter(nodes.find(tag));
                 if( iter == nodes.end() )
@@ -248,11 +248,47 @@ struct dfa_graph{
 			return nullptr;
                 return &iter->second;
         }
+        void display()const{
+                std::cout << boost::format("%5s %5s %5s %s\n") 
+                        % "id" % "a" % "b" % " ";
+                for( auto const& p : nodes){
+
+                        auto ma = p.second.move('a');
+                        auto mb = p.second.move('b');
+                        std::cout << boost::format("%5s %5s %5s %s\n") 
+                                % p.first
+                                % ( ma ? ma->tag() : std::string{})
+                                % ( mb ? mb->tag() : std::string{})
+                                % ( p.second.is_accepting() ? "*" : "");
+                }
+        }
 private:
-	unsigned id_ = 0;
         std::map<std::string, dfa_node> nodes;
         dfa_node* start_ = nullptr;
 };
+
+bool match(dfa_graph const& g, std::string const& seq){
+        typedef state::iterator NI;
+
+	enum{
+		Debug = 0
+	};
+
+        dfa_node const* iter { g.start() };
+
+
+	if(Debug)std::cout << "BEGIN\n     curr = " << iter->tag() << "\n";
+        for(size_t i=0;i!=seq.size();++i){
+                char c(seq[i]);
+
+                iter = iter->move(c);
+		
+		if(Debug)std::cout << "c=" << c << ", curr = " << iter->tag() << "\n";
+        }
+	if(Debug)std::cout << "     curr = " << iter->tag() << "\nEND\n\n";
+
+	return iter->is_accepting();
+}
 
 
 auto compile(nfa_graph const& nfa){
@@ -270,18 +306,20 @@ auto compile(nfa_graph const& nfa){
         auto start_ec{  nfa.start()->epsilon_closure() };      
         stack.emplace_back( start_ec );
 
-        id[stack.back()] = "__start__";
-
 	for(;stack.size();){
 		auto head{ stack.back() };
 		stack.pop_back();
 
+                if( head.size() )
 		for( char c : {'a', 'b' } ){
 			if( m[head].count( c) == 1 )
 				continue;
 			state s{ head.move(c).epsilon_closure() };
                         m[head][c] = s;
-			stack.push_back(s);
+                        //if( s.size() )
+                        {
+                                stack.push_back(s);
+                        }
 		}
 	}
 	PRINT(m.size());
@@ -297,6 +335,8 @@ auto compile(nfa_graph const& nfa){
                                 % l.second;
                 }
 	}
+
+        id[start_ec] = "__start__";
 	
         for( auto const& k : m ) {
 
@@ -350,7 +390,9 @@ void test0(){
 	start->epsilon(_2);
 	_2->transition('b', _3);
 	_3->transition('a', end);
-
+	
+        auto dfa = compile(g);
+	#if 0
 	EXPECT_FALSE(match(g, ""));
         EXPECT_FALSE(match(g, "a"));
 	EXPECT_TRUE(match(g, "ab"));
@@ -359,6 +401,18 @@ void test0(){
         EXPECT_FALSE(match(g, "bab"));
 	EXPECT_TRUE(match(g, "aaab"));
 	EXPECT_TRUE(match(g, "aba"));
+	#endif
+        dfa.display();
+	
+        EXPECT_FALSE(match(dfa, ""));
+        EXPECT_FALSE(match(dfa, "a"));
+	EXPECT_TRUE(match(dfa, "ab"));
+	EXPECT_TRUE(match(dfa, "ba"));
+        EXPECT_FALSE(match(dfa, "abb"));
+        EXPECT_FALSE(match(dfa, "bab"));
+	EXPECT_TRUE(match(dfa, "aaab"));
+	EXPECT_TRUE(match(dfa, "aba"));
+
 }
 
 /*
@@ -412,6 +466,8 @@ void test1(){
 
 	_9->transition('b', end);
 
+        auto dfa = compile(g);
+
 
         EXPECT_FALSE(match(g, ""));
         EXPECT_FALSE(match(g, "a"));
@@ -423,8 +479,18 @@ void test1(){
         EXPECT_FALSE(match(g, "aba"));
         EXPECT_TRUE(match(g, "babb"));
         EXPECT_TRUE(match(g, "aaabb"));
+        
+        EXPECT_FALSE(match(dfa, ""));
+        EXPECT_FALSE(match(dfa, "a"));
+        EXPECT_FALSE(match(dfa, "ab"));
+        EXPECT_FALSE(match(dfa, "ba"));
+        EXPECT_TRUE(match(dfa, "abb"));
+        EXPECT_FALSE(match(dfa, "bab"));
+        EXPECT_FALSE(match(dfa, "aaab"));
+        EXPECT_FALSE(match(dfa, "aba"));
+        EXPECT_TRUE(match(dfa, "babb"));
+        EXPECT_TRUE(match(dfa, "aaabb"));
 
-	auto ret = compile(g);
 
 
 }
