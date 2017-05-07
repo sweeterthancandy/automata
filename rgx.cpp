@@ -4,10 +4,22 @@
 #include <boost/lexical_cast.hpp>
 
 #include <map>
+#include <vector>
 #include <set>
 #include <iostream>
 #include <algorithm>
 #include <string>
+
+#define PRINT(EXPR) do{ std::cout << #EXPR << " => " << (EXPR) << "\n"; }while(0)
+#define EXPECT_BOOL(EXPR, VALUE)                                   \
+do{                                                                \
+	bool ret{ EXPR };				           \
+	std::cout << #EXPR << " => " << ret << " "                 \
+		<< ( ret == VALUE ? "Success" : "Failed" )         \
+	<< "\n";						   \
+}while(0)
+#define EXPECT_TRUE(EXPR) EXPECT_BOOL(EXPR,true)
+#define EXPECT_FALSE(EXPR) EXPECT_BOOL(EXPR,false)
 
 struct node;
 
@@ -26,6 +38,7 @@ public:
         const_iterator begin()const{ return mem_.begin(); }
         const_iterator end  ()const{ return mem_.  end(); }
         size_t size()const{ return mem_.size(); }
+	auto empty()const{ return mem_.empty(); }
 
         void insert(node* ptr){ mem_.insert(ptr); }
 
@@ -36,6 +49,21 @@ public:
                 return *this;
         }
         state epsilon_closure()const;
+	state move(char c)const;
+
+	friend state union_(state const& left, state const& right){
+		std::vector<node*> aux;
+		std::set_intersection(
+			left.begin(), left.end(),
+			right.begin(), right.end(),
+			std::back_inserter(aux));
+		state result;
+		for( auto _ : aux)
+			result.insert(_);
+		return std::move(result);
+	}
+
+
 private:
         std::set<node*> mem_;
 };
@@ -96,6 +124,13 @@ state state::epsilon_closure()const{
         }
         return result;
 }
+state state::move(char c)const{
+	state result;
+	for( auto iter : mem_ ){
+		result += iter->closure(c);
+	}
+	return std::move(result);
+}
 
 
 struct graph{
@@ -132,27 +167,22 @@ bool match(graph& g, std::string const& seq){
 	};
 
         state curr(g.start()->epsilon_closure());
-        state next;
+
+	state end;
+	end.insert( g.end() );
 
 	if(Debug)std::cout << "BEGIN\n     curr = " << curr << "\n";
         for(size_t i=0;i!=seq.size();++i){
                 char c(seq[i]);
 
-                for(NI iter(curr.begin()),end(curr.end());iter!=end;++iter){
-                        next += (*iter)->closure(c).epsilon_closure();
-                }
-                curr = next;
-                next = state();
+		curr = curr.move(c).epsilon_closure();
 		
 		if(Debug)std::cout << "c=" << c << ", curr = " << curr << "\n";
         }
 	if(Debug)std::cout << "     curr = " << curr << "\nEND\n\n";
 
-        for(NI iter(curr.begin()),end(curr.end());iter!=end;++iter){
-                if( (*iter)->tag() == "__end__")
-                        return true;
-        }
-        return false;
+	return ! union_( curr, end).empty();
+
 }
 
 
@@ -160,16 +190,6 @@ bool match(graph& g, std::string const& seq){
 
 
 
-#define PRINT(EXPR) do{ std::cout << #EXPR << " => " << (EXPR) << "\n"; }while(0)
-#define EXPECT_BOOL(EXPR, VALUE)                                   \
-do{                                                                \
-	bool ret{ EXPR };				           \
-	std::cout << #EXPR << " => " << ret << " "                 \
-		<< ( ret == VALUE ? "Success" : "Failed" )         \
-	<< "\n";						   \
-}while(0)
-#define EXPECT_TRUE(EXPR) EXPECT_BOOL(EXPR,true)
-#define EXPECT_FALSE(EXPR) EXPECT_BOOL(EXPR,false)
 
 /*
         a*(ab|ba)
@@ -186,10 +206,10 @@ void test0(){
 	auto start  = g.start();
 	auto end = g.end();
 
-	auto _0 = g.make();
-	auto _1 = g.make();
-	auto _2 = g.make();
-	auto _3 = g.make();
+	auto _0 = g.get("0");
+	auto _1 = g.get("1");
+	auto _2 = g.get("2");
+	auto _3 = g.get("3");
 
 	start->transition('a', start);
 
@@ -201,14 +221,14 @@ void test0(){
 	_2->transition('b', _3);
 	_3->transition('a', end);
 
-        EXPECT_FALSE(match(g, ""));
+	EXPECT_FALSE(match(g, ""));
         EXPECT_FALSE(match(g, "a"));
-        EXPECT_TRUE(match(g, "ab"));
-        EXPECT_TRUE(match(g, "ba"));
+	EXPECT_TRUE(match(g, "ab"));
+	EXPECT_TRUE(match(g, "ba"));
         EXPECT_FALSE(match(g, "abb"));
         EXPECT_FALSE(match(g, "bab"));
-        EXPECT_TRUE(match(g, "aaab"));
-        EXPECT_TRUE(match(g, "aba"));
+	EXPECT_TRUE(match(g, "aaab"));
+	EXPECT_TRUE(match(g, "aba"));
 }
 
 /*
@@ -278,10 +298,7 @@ void test1(){
 
 
 int main(){
-        #if 0
         test0();
-	std::cout << "-----\n";
-	#endif
 	test1();
 }
 
