@@ -1,6 +1,7 @@
 
-#pragma warning(push, 4)
-#pragma warning( disable : 4530 4127)
+
+
+#include <boost/lexical_cast.hpp>
 
 #include <map>
 #include <set>
@@ -44,11 +45,17 @@ struct node{
         explicit node(std::string const& tag):tag_(tag){}
 
         // decl transitions
+        node& epsilon(node* that){
+                return transition('\0', that);
+        }
         node& epsilon(node& that){
                 return transition('\0', that);
         }
         node& transition(char c, node& that){
-                edges[c].insert(&that);
+		return transition(c, &that);
+        }
+        node& transition(char c, node* that){
+                edges[c].insert(that);
                 return *this;
         }
 
@@ -93,40 +100,53 @@ state state::epsilon_closure()const{
 
 struct graph{
         graph(){
-                #if 0
-                for(char c=1;c!=0;++c){
-                        (*this)["__end__"].transition(c, (*this)["__end__"]);
-                }
-                #endif
         }
-        node& operator[](std::string const& tag){
+	node* make(){
+		// XXX unique not checked
+		return get(boost::lexical_cast<std::string>(id_));
+	}
+	node* start(){
+		return get("__start__");
+	}
+	node* end(){
+		return get("__end__");
+	}
+        node* get(std::string const& tag){
                 typedef std::map<std::string, node>::iterator MI;
                 MI iter(nodes.find(tag));
                 if( iter == nodes.end() )
                         iter = nodes.insert(std::make_pair(tag, node(tag))).first;
-                return iter->second;
+                return &iter->second;
         }
+private:
+	unsigned id_ = 0;
         std::map<std::string, node> nodes;
 };
+
 
 bool match(graph& g, std::string const& seq){
         typedef state::iterator NI;
 
-        state curr(g["__star__"].epsilon_closure());
+	enum{
+		Debug = 0
+	};
+
+        state curr(g.start()->epsilon_closure());
         state next;
 
-        std::cout << "BEGIN\n     curr = " << curr << "\n";
+	if(Debug)std::cout << "BEGIN\n     curr = " << curr << "\n";
         for(size_t i=0;i!=seq.size();++i){
                 char c(seq[i]);
-                std::cout << "c=" << c << ", curr = " << curr << "\n";
 
                 for(NI iter(curr.begin()),end(curr.end());iter!=end;++iter){
                         next += (*iter)->closure(c).epsilon_closure();
                 }
                 curr = next;
                 next = state();
+		
+		if(Debug)std::cout << "c=" << c << ", curr = " << curr << "\n";
         }
-        std::cout << "     curr = " << curr << "\nEND\n\n";
+	if(Debug)std::cout << "     curr = " << curr << "\nEND\n\n";
 
         for(NI iter(curr.begin()),end(curr.end());iter!=end;++iter){
                 if( (*iter)->tag() == "__end__")
@@ -135,92 +155,134 @@ bool match(graph& g, std::string const& seq){
         return false;
 }
 
-#if 0
-struct factory{
-        void register_(std::string const& expr, graph* g){
-                m_[expr] = g;
-        }
-        graph* make(std::string const& expr){
-                return m_[expr];
-        }
-        static factory& get(){
-                factory* mem = 0;
-                if( ! mem ){
-                        mem = new factory;
-                }
-                return *mem;
-        }
-private:
-        std::map<std::string, graph*> m_;
-};
-#endif
 
 
 
 
 
 #define PRINT(EXPR) do{ std::cout << #EXPR << " => " << (EXPR) << "\n"; }while(0)
+#define EXPECT_BOOL(EXPR, VALUE)                                   \
+do{                                                                \
+	bool ret{ EXPR };				           \
+	std::cout << #EXPR << " => " << ret << " "                 \
+		<< ( ret == VALUE ? "Success" : "Failed" )         \
+	<< "\n";						   \
+}while(0)
+#define EXPECT_TRUE(EXPR) EXPECT_BOOL(EXPR,true)
+#define EXPECT_FALSE(EXPR) EXPECT_BOOL(EXPR,false)
 
 /*
-        (ab|ba)
-                 -epsilon---- 0 ---a--- 1 ----b-- 
+        a*(ab|ba)
+
+        /-a-\
+        |   |    -epsilon---- 0 ---a--- 1 ----b-- 
         start  -/                                  \-- end
                 \                                  /
                  -epsilon---- 2 ---b--- 4 ----a--
  */
 void test0(){
         graph g;
-        
-        g["__star__"].epsilon( g["0"]);
-        g["0"].transition('a', g["1"]);
-        g["1"].transition('b', g["__end__"]);
-        
-        g["__star__"].epsilon( g["2"]);
-        g["2"].transition('b', g["3"]);
-        g["3"].transition('a', g["__end__"]);
 
-        PRINT(match(g, ""));
-        PRINT(match(g, "a "));
-        PRINT(match(g, "ab"));
-        PRINT(match(g, "ba"));
-        PRINT(match(g, "abb"));
-        PRINT(match(g, "bab"));
+	auto start  = g.start();
+	auto end = g.end();
+
+	auto _0 = g.make();
+	auto _1 = g.make();
+	auto _2 = g.make();
+	auto _3 = g.make();
+
+	start->transition('a', start);
+
+	start->epsilon(_0);
+	_0->transition('a', _1);
+	_1->transition('b', end);
+	
+	start->epsilon(_2);
+	_2->transition('b', _3);
+	_3->transition('a', end);
+
+        EXPECT_FALSE(match(g, ""));
+        EXPECT_FALSE(match(g, "a"));
+        EXPECT_TRUE(match(g, "ab"));
+        EXPECT_TRUE(match(g, "ba"));
+        EXPECT_FALSE(match(g, "abb"));
+        EXPECT_FALSE(match(g, "bab"));
+        EXPECT_TRUE(match(g, "aaab"));
+        EXPECT_TRUE(match(g, "aba"));
 }
-// a*(ab|ba)
+
+/*
+
+        (a|b)*abb         ----<--- e -----------
+                         /                      \
+                        /   > e --<2>-- a --<3>  \
+                       /   /                   \  \
+        <start>-- e --<1>--                      -<6>-- e --<7>-- a --<8>-- b --<9> -- b <end>
+             \             \                   /            /
+              \             - e --<4>-- b --<5>            /
+               \                                          /
+                ------------->---- e --------------------
+ */
 void test1(){
         graph g;
 
-        g["__star__"].transition('a', g["__star__"]);
+	auto start  = g.start();
+	auto end = g.end();
 
-        g["__star__"].epsilon( g["0"]);
-        g["0"].transition('a', g["1"]);
-        g["1"].transition('b', g["__end__"]);
-        
-        g["__star__"].epsilon( g["2"]);
-        g["2"].transition('b', g["3"]);
-        g["3"].transition('a', g["4"]);
-        g["4"].epsilon(g["5"]);
-        g["5"].epsilon(g["6"]);
-        g["6"].epsilon(g["__end__"]);
+	auto _1 = g.get("1");
+	auto _2 = g.get("2");
+	auto _3 = g.get("3");
+	auto _4 = g.get("4");
+	auto _5 = g.get("5");
+	auto _6 = g.get("6");
+	auto _7 = g.get("7");
+	auto _8 = g.get("8");
+	auto _9 = g.get("9");
 
-        PRINT(match(g, ""));
-        PRINT(match(g, "a "));
-        PRINT(match(g, "ab"));
-        PRINT(match(g, "ba"));
-        PRINT(match(g, "aab"));
-        PRINT(match(g, "aaba"));
-        PRINT(match(g, "aabb"));
-        PRINT(match(g, "abab"));
-        PRINT(match(g, "baabb"));
-        PRINT(match(g, "babab"));
+	start->epsilon(_1);
+	start->epsilon(_7);
+
+	_1->epsilon(_2);
+	_1->epsilon(_4);
+
+	_2->transition('a', _3);
+
+	_3->epsilon(_6);
+
+	_4->transition('b', _5);
+
+	_5->epsilon(_6);
+
+	_6->epsilon(_7);
+	_6->epsilon(_1);
+
+	_7->transition('a', _8);
+
+	_8->transition('b', _9);
+
+	_9->transition('b', end);
+
+
+        EXPECT_FALSE(match(g, ""));
+        EXPECT_FALSE(match(g, "a"));
+        EXPECT_FALSE(match(g, "ab"));
+        EXPECT_FALSE(match(g, "ba"));
+        EXPECT_TRUE(match(g, "abb"));
+        EXPECT_FALSE(match(g, "bab"));
+        EXPECT_FALSE(match(g, "aaab"));
+        EXPECT_FALSE(match(g, "aba"));
+        EXPECT_TRUE(match(g, "babb"));
+        EXPECT_TRUE(match(g, "aaabb"));
 }
-//   a*b
-//   (a|b)  
+
+
 
 int main(){
+        #if 0
         test0();
-        std::cout << "-----\n";
-        test1();
+	std::cout << "-----\n";
+	#endif
+	test1();
 }
 
 
