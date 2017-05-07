@@ -49,6 +49,12 @@ public:
                 }
                 return *this;
         }
+        bool operator==(state const& that)const{
+                return mem_.size() == that.mem_.size() ||
+                        std::equal(
+                                begin(), end(),
+                                that.begin(), that.end());
+        }
         state epsilon_closure()const;
 	state move(char c)const;
 
@@ -145,26 +151,25 @@ state state::move(char c)const{
 }
 
 
-template<class NodeType>
-struct basic_graph{
-	using node = NodeType;
-        basic_graph(){
+struct nfa_graph{
+
+        nfa_graph(){
         }
-	node* make(){
+	nfa_node* make(){
 		// XXX unique not checked
 		return get(boost::lexical_cast<std::string>(id_));
 	}
-	node* start(){ return get("__start__"); }
-	node* end(){ return get("__end__"); }
-	node const* start()const{ return get("__start__"); }
-	node const* end()const{ return get("__end__"); }
-        node* get(std::string const& tag){
+	nfa_node* start(){ return get("__start__"); }
+	nfa_node* end(){ return get("__end__"); }
+	nfa_node const* start()const{ return get("__start__"); }
+	nfa_node const* end()const{ return get("__end__"); }
+        nfa_node* get(std::string const& tag){
                 auto iter(nodes.find(tag));
                 if( iter == nodes.end() )
-                        iter = nodes.insert(std::make_pair(tag, node(tag))).first;
+                        iter = nodes.insert(std::make_pair(tag, nfa_node(tag))).first;
                 return &iter->second;
         }
-        node const* get(std::string const& tag)const{
+        nfa_node const* get(std::string const& tag)const{
                 auto iter(nodes.find(tag));
                 if( iter == nodes.end() )
 			return nullptr;
@@ -172,10 +177,8 @@ struct basic_graph{
         }
 private:
 	unsigned id_ = 0;
-        std::map<std::string, node> nodes;
+        std::map<std::string, nfa_node> nodes;
 };
-
-using nfa_graph = basic_graph<nfa_node>;
 
 
 
@@ -216,39 +219,102 @@ struct dfa_node{
 		map_.insert(std::make_pair(c,ptr));
 		return *this;
 	}
+        void decl_accepting(){ accepting_ = true; }
 private:
 	std::string tag_;
 	std::map<char, dfa_node*> map_;
+        bool accepting_ = false;
+};
+struct dfa_graph{
+
+        dfa_graph(){
+        }
+	dfa_node* make(){
+		// XXX unique not checked
+		return get(boost::lexical_cast<std::string>(id_));
+	}
+        void decl_start(dfa_node* ptr){ start_ = ptr; }
+	dfa_node* start(){ return get("__start__"); }
+	dfa_node const* start()const{ return get("__start__"); }
+        dfa_node* get(std::string const& tag){
+                auto iter(nodes.find(tag));
+                if( iter == nodes.end() )
+                        iter = nodes.insert(std::make_pair(tag, dfa_node(tag))).first;
+                return &iter->second;
+        }
+        dfa_node const* get(std::string const& tag)const{
+                auto iter(nodes.find(tag));
+                if( iter == nodes.end() )
+			return nullptr;
+                return &iter->second;
+        }
+private:
+	unsigned id_ = 0;
+        std::map<std::string, dfa_node> nodes;
+        dfa_node* start_ = nullptr;
 };
 
-using dfa_graph = basic_graph<dfa_node>;
 
 auto compile(nfa_graph const& nfa){
-	std::map< std::pair< state, char>, state > m;
+        dfa_graph dfa;
+
+        state end;
+        end.insert( nfa.end() );
+
+	std::map< state, std::map<char, state > > m;
+        std::map< state, std::string> id;
 
 	std::vector<state> stack;
-	stack.emplace_back( nfa.start()->epsilon_closure() );
+	//stack.emplace_back( nfa.start()->epsilon_closure() );
+
+        auto start_ec{  nfa.start()->epsilon_closure() };      
+        stack.emplace_back( start_ec );
+
+        id[stack.back()] = "__start__";
 
 	for(;stack.size();){
 		auto head{ stack.back() };
 		stack.pop_back();
 
 		for( char c : {'a', 'b' } ){
-			if( m.count( std::make_pair( head, c) ) == 1 )
+			if( m[head].count( c) == 1 )
 				continue;
 			state s{ head.move(c).epsilon_closure() };
-			m.insert( std::make_pair(std::make_pair(head, c), s) );
+                        m[head][c] = s;
 			stack.push_back(s);
 		}
 	}
 	PRINT(m.size());
 
-	for( auto const& _ : m ){
-		std::cout << boost::format("%30s x %c -> %s\n")
-			% _.first.first
-			% _.first.second
-			% _.second;
+        unsigned counter{0};
+
+	for( auto const& k : m ){
+                id[k.first] = boost::lexical_cast<std::string>(++counter);
+                for( auto const& l : k.second){
+                        std::cout << boost::format("%30s x %c -> %s\n")
+                                % k.first
+                                % l.first
+                                % l.second;
+                }
 	}
+	
+        for( auto const& k : m ) {
+
+                dfa_node* node = dfa.get( id[k.first] );
+
+                if( k.first == start_ec )
+                        dfa.decl_start( node );
+                
+                if( union_( k.first, end ).size() )
+                        node->decl_accepting();
+
+                for( auto const& l : k.second){
+                        node->transition(l.first, dfa.get( id[l.second] ) );
+
+                }
+        }
+
+        return dfa;
 }
 
 
@@ -358,10 +424,7 @@ void test1(){
         EXPECT_TRUE(match(g, "babb"));
         EXPECT_TRUE(match(g, "aaabb"));
 
-	auto compile(g);
-
-
-
+	auto ret = compile(g);
 
 
 }
